@@ -73,13 +73,16 @@ func ServiceAccount(n ClusterPolicyController) (gpuv1.State, error) {
 // Role creates Role resource
 func Role(n ClusterPolicyController) (gpuv1.State, error) {
 	state := n.idx
+	// 获取 Role 对象（就是从 yaml 文件中反序列化的对象）
 	obj := n.resources[state].Role.DeepCopy()
 	logger := log.WithValues("Role", obj.Name, "Namespace", obj.Namespace)
 
+	// 设置这个 Role 的 Reference
 	if err := controllerutil.SetControllerReference(n.singleton, obj, n.rec.scheme); err != nil {
 		return gpuv1.NotReady, err
 	}
 
+	// 创建 Role 对象
 	if err := n.rec.client.Create(context.TODO(), obj); err != nil {
 		if errors.IsAlreadyExists(err) {
 			logger.Info("Found Resource")
@@ -1018,6 +1021,7 @@ func isDaemonSetReady(name string, n ClusterPolicyController) gpuv1.State {
 	opts := []client.ListOption{
 		client.MatchingLabels{"app": name},
 	}
+	// 通过 label 获取目标 DaemonSet
 	log.Info("DEBUG: DaemonSet", "LabelSelector", fmt.Sprintf("app=%s", name))
 	list := &appsv1.DaemonSetList{}
 	err := n.rec.client.List(context.TODO(), list, opts...)
@@ -1026,16 +1030,19 @@ func isDaemonSetReady(name string, n ClusterPolicyController) gpuv1.State {
 	}
 	log.Info("DEBUG: DaemonSet", "NumberOfDaemonSets", len(list.Items))
 	if len(list.Items) == 0 {
+		// 没有搜索到，返回 NotReady
 		return gpuv1.NotReady
 	}
 
 	ds := list.Items[0]
 	log.Info("DEBUG: DaemonSet", "NumberUnavailable", ds.Status.NumberUnavailable)
 
+	// 如果 DaemonSet 的 NumberUnavailable 不等于 0，返回 NotReady
 	if ds.Status.NumberUnavailable != 0 {
 		return gpuv1.NotReady
 	}
 
+	// DaemonSet 所控制的 Pod 如果状态都是 Running，返回 Ready，否则返回 NotReady
 	return isPodReady(name, n, "Running")
 }
 
@@ -1066,20 +1073,25 @@ func Deployment(n ClusterPolicyController) (gpuv1.State, error) {
 // DaemonSet creates Daemonset resource
 func DaemonSet(n ClusterPolicyController) (gpuv1.State, error) {
 	state := n.idx
+	// 获取 DaemonSet 对象
 	obj := n.resources[state].DaemonSet.DeepCopy()
 
 	logger := log.WithValues("DaemonSet", obj.Name, "Namespace", obj.Namespace)
 
+	// 预处理 DaemonSet 对象，例如把 NVIDIA Driver 中的 关于 DaemonSet 的 yaml 文件中的预留字段进行填充
+	// assets/state-driver/0500_daemonset.yaml
 	err := preProcessDaemonSet(obj, n)
 	if err != nil {
 		logger.Info("Could not pre-process", "Error", err)
 		return gpuv1.NotReady, err
 	}
 
+	// 设置 Reference，也就是和 ClusterPolicy 关联
 	if err := controllerutil.SetControllerReference(n.singleton, obj, n.rec.scheme); err != nil {
 		return gpuv1.NotReady, err
 	}
 
+	// 创建 DaemonSet
 	if err := n.rec.client.Create(context.TODO(), obj); err != nil {
 		if errors.IsAlreadyExists(err) {
 			logger.Info("Found Resource")
@@ -1090,6 +1102,7 @@ func DaemonSet(n ClusterPolicyController) (gpuv1.State, error) {
 		return gpuv1.NotReady, err
 	}
 
+	// 判断一个 DaemonSet 是否 Ready
 	return isDaemonSetReady(obj.Name, n), nil
 }
 

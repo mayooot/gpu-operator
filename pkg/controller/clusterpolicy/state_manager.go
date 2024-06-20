@@ -47,8 +47,10 @@ type ClusterPolicyController struct {
 	openshift string
 }
 
+// 将各个组件的安装函数注册到 ClusterPolicyController 中
 func addState(n *ClusterPolicyController, path string) error {
-	// TODO check for path
+	// 有两个返回值 Resource：代表安装这个组件需要的 K8s 的资源
+	// controlFunc：K8s 各种资源的安装函数
 	res, ctrl := addResourcesControls(path, n.openshift)
 
 	n.controls = append(n.controls, ctrl)
@@ -124,8 +126,10 @@ func hasGPULabels(labels map[string]string) bool {
 }
 
 // labelGPUNodes labels nodes with GPU's with Nvidia common label
+// 遍历所有节点，并且给 GPU 节点加上 label
 func (n *ClusterPolicyController) labelGPUNodes() error {
 	// fetch all nodes
+	// 获取所有节点
 	opts := []client.ListOption{}
 	list := &corev1.NodeList{}
 	err := n.rec.client.List(context.TODO(), list, opts...)
@@ -137,6 +141,8 @@ func (n *ClusterPolicyController) labelGPUNodes() error {
 		// get node labels
 		labels := node.GetLabels()
 		if !hasCommonGPULabel(labels) && hasGPULabels(labels) {
+			// 如果没有 nvidia.com/gpu.present=true 的 label，但是节点被 NFD(Node Feature Discovery) 打过标签
+			// 那么这个 node 就是一个 GPU 节点
 			// label node with common Nvidia GPU label
 			labels[commonGPULabelKey] = commonGPULabelValue
 			node.SetLabels(labels)
@@ -145,6 +151,7 @@ func (n *ClusterPolicyController) labelGPUNodes() error {
 				return fmt.Errorf("Unable to label node %s with nvidia.com/gpu.present=true, err %s", node.ObjectMeta.Name, err.Error())
 			}
 		} else if hasCommonGPULabel(labels) && !hasGPULabels(labels) {
+			// 如果有 nvidia.com/gpu.present=true 的label，但是 NFD 的 label 没有，那么说明这个节点已经不是一个 GPU 节点
 			// previously labelled node and no longer has GPU's
 			// label node to reset common Nvidia GPU label
 			labels[commonGPULabelKey] = "false"
@@ -174,6 +181,7 @@ func (n *ClusterPolicyController) init(r *ReconcileClusterPolicy, i *gpuv1.Clust
 		promv1.AddToScheme(r.scheme)
 		secv1.AddToScheme(r.scheme)
 
+		// 注册需要安装的组件
 		addState(n, "/opt/gpu-operator/state-driver")
 		addState(n, "/opt/gpu-operator/state-container-toolkit")
 		addState(n, "/opt/gpu-operator/state-device-plugin")
@@ -183,6 +191,7 @@ func (n *ClusterPolicyController) init(r *ReconcileClusterPolicy, i *gpuv1.Clust
 	}
 
 	// fetch all nodes and label gpu nodes
+	// 获取所有节点并且为 GPU 节点打上 nvidia.com/gpu.present=true 的标签
 	err = n.labelGPUNodes()
 	if err != nil {
 		return err
@@ -191,10 +200,15 @@ func (n *ClusterPolicyController) init(r *ReconcileClusterPolicy, i *gpuv1.Clust
 	return nil
 }
 
+// 每次调用都会部署一个组件，需要注意的是 n.controls 的定义是 []controlFunc
+// 而 controlFunc 的定义是 type controlFunc []func(n ClusterPolicyController) (gpuv1.State, error)
+// 所以说 n.controls[n.idx] 是按照顺序部署一个组件，这个组件部署时要执行多个 func
 func (n *ClusterPolicyController) step() (gpuv1.State, error) {
 	for _, fs := range n.controls[n.idx] {
+		// fs 是安装某个组件的函数，它的签名是：func(n ClusterPolicyController) (v1.State, error)
 		stat, err := fs(*n)
 		if err != nil {
+			// 安装失败
 			return stat, err
 		}
 
@@ -203,6 +217,7 @@ func (n *ClusterPolicyController) step() (gpuv1.State, error) {
 		}
 	}
 
+	// 状态为 Ready，才会更新索引
 	n.idx = n.idx + 1
 
 	return gpuv1.Ready, nil

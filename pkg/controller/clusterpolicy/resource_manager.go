@@ -78,18 +78,25 @@ func getAssetsFrom(path, openshiftVersion string) []assetsFromFile {
 	return manifests
 }
 
+// 获取给定的 path 目录下的 yaml 文件，通过 yaml 文件中的 Kind 字段确定要 K8s 资源类型
+// 然后根据不同类型注册不同的处理函数
+// 最后返回需要的资源类型 res，里面含有具体的资源配置信息
+// 和每个资源的处理函数 ctrl
 func addResourcesControls(path, openshiftVersion string) (Resources, controlFunc) {
 	res := Resources{}
 	ctrl := controlFunc{}
 
 	log.Info("Getting assets from: ", "path:", path)
+	// 从给定的 path 下读取文件
 	manifests := getAssetsFrom(path, openshiftVersion)
 
+	// 创建解析 yaml 的工具
 	s := json.NewYAMLSerializer(json.DefaultMetaFactory, scheme.Scheme,
 		scheme.Scheme)
 	reg, _ := regexp.Compile(`\b(\w*kind:\w*)\B.*\b`)
 
 	for _, m := range manifests {
+		// 使用正则表达式寻找 kind 关键字
 		kind := reg.FindString(string(m))
 		slce := strings.Split(kind, ":")
 		kind = strings.TrimSpace(slce[1])
@@ -97,14 +104,16 @@ func addResourcesControls(path, openshiftVersion string) (Resources, controlFunc
 		log.Info("DEBUG: Looking for ", "Kind", kind, "in path:", path)
 
 		switch kind {
+		case "Role":
+			// 将 yaml 文件内容反序列化到 res.ServiceAccount 里
+			_, _, err := s.Decode(m, nil, &res.Role)
+			panicIfError(err)
+			// 并将处理函数添加到 ctrl
+			ctrl = append(ctrl, Role)
 		case "ServiceAccount":
 			_, _, err := s.Decode(m, nil, &res.ServiceAccount)
 			panicIfError(err)
 			ctrl = append(ctrl, ServiceAccount)
-		case "Role":
-			_, _, err := s.Decode(m, nil, &res.Role)
-			panicIfError(err)
-			ctrl = append(ctrl, Role)
 		case "RoleBinding":
 			_, _, err := s.Decode(m, nil, &res.RoleBinding)
 			panicIfError(err)
@@ -124,6 +133,7 @@ func addResourcesControls(path, openshiftVersion string) (Resources, controlFunc
 		case "DaemonSet":
 			_, _, err := s.Decode(m, nil, &res.DaemonSet)
 			panicIfError(err)
+			// 重点看一下 DaemonSet 的处理函数
 			ctrl = append(ctrl, DaemonSet)
 		case "Deployment":
 			_, _, err := s.Decode(m, nil, &res.Deployment)
